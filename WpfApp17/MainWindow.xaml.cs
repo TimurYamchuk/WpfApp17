@@ -1,60 +1,82 @@
-﻿using System;
+using System;
 using System.IO;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
 
 namespace WpfApp17
 {
     public partial class MainWindow : Window
     {
-        private static Semaphore semaphore = new Semaphore(3, 3, "GlobalAppSemaphore");
-        public SynchronizationContext uiContext;
+        private static SemaphoreSlim semaphore = new SemaphoreSlim(3, 3); // Используем SemaphoreSlim для асинхронности
         private Random random = new Random();
         private Mutex mutex;
-        private bool CreatedNew;
+        private bool createdNew;
 
         public MainWindow()
         {
-            if (!semaphore.WaitOne(0))
+            InitializeComponent();
+            mutex = new Mutex(false, "DB744E26-72C1-4F2A-8BF8-5C31980953C7", out createdNew);
+        }
+
+        private async Task RunThreadsAsync()
+        {
+            if (!await semaphore.WaitAsync(0))
             {
                 MessageBox.Show("Программа не может запустить более 3 потоков.");
-                Close();
                 return;
             }
 
-            InitializeComponent();
-            uiContext = SynchronizationContext.Current;
-            this.Closed += (s, e) => semaphore.Release();
-            mutex = new Mutex(false, "DB744E26-72C1-4F2A-8BF8-5C31980953C7", out CreatedNew);
+            try
+            {
+                // Стартуем первый поток
+                await Task.Run(() => ThreadFunction1());
+            }
+            finally
+            {
+                semaphore.Release();
+            }
         }
 
-        private void ThreadFunction1()
+        private async Task ThreadFunction1()
         {
+            await Task.Yield(); // Позволяет другим потокам работать
+
             mutex.WaitOne();
-            new Thread(ThreadFunction2).Start();
             uiContext.Send(d => txtStatus1.Text = "Поток 1: Запущен", null);
 
+            int[] numbers = GenerateRandomNumbers();
+            await WriteNumbersToFile("number.txt", numbers);
+
+            mutex.ReleaseMutex();
+        }
+
+        private int[] GenerateRandomNumbers()
+        {
             int[] numbers = new int[100];
             for (int i = 0; i < numbers.Length; i++)
             {
                 numbers[i] = random.Next(i, 100);
             }
-
-            File.WriteAllLines("number.txt", numbers.Select(n => n.ToString()));
-            Thread.Sleep(1000);
-            uiContext.Send(d => txtStatus1.Text = "Поток 1: Записал числа в файл", null);
-
-            mutex.ReleaseMutex();
+            return numbers;
         }
 
-        private void ThreadFunction2()
+        private async Task WriteNumbersToFile(string fileName, int[] numbers)
         {
-            mutex.WaitOne();
-            new Thread(ThreadFunction3).Start();
-            uiContext.Send(d => txtStatus2.Text = "Поток 2: Запущен", null);
+            await Task.Run(() =>
+            {
+                File.WriteAllLines(fileName, numbers.Select(n => n.ToString()));
+            });
+            uiContext.Send(d => txtStatus1.Text = "Поток 1: Записал числа в файл", null);
+        }
 
-            Thread.Sleep(1000);
+        private async Task ThreadFunction2()
+        {
+            await Task.Yield(); // Позволяет другим потокам работать
+
+            mutex.WaitOne();
+            uiContext.Send(d => txtStatus2.Text = "Поток 2: Запущен", null);
 
             if (!File.Exists("number.txt"))
             {
@@ -63,24 +85,29 @@ namespace WpfApp17
                 return;
             }
 
-            string[] lines = File.ReadAllLines("number.txt");
-            int[] numbers = lines.Select(line => int.Parse(line)).ToArray();
+            var numbers = await ReadNumbersFromFile("number.txt");
             var primeNumbers = numbers.Where(IsPrime).ToArray();
 
-            File.WriteAllLines("primeNumbers.txt", primeNumbers.Select(n => n.ToString()));
-
-            Thread.Sleep(1000);
-            uiContext.Send(d => txtStatus2.Text = "Поток 2: Файл с простыми числами создан.", null);
+            await WriteNumbersToFile("primeNumbers.txt", primeNumbers);
 
             mutex.ReleaseMutex();
         }
 
-        private void ThreadFunction3()
+        private async Task<int[]> ReadNumbersFromFile(string fileName)
         {
-            mutex.WaitOne();
+            return await Task.Run(() =>
+            {
+                string[] lines = File.ReadAllLines(fileName);
+                return lines.Select(int.Parse).ToArray();
+            });
+        }
 
+        private async Task ThreadFunction3()
+        {
+            await Task.Yield(); // Позволяет другим потокам работать
+
+            mutex.WaitOne();
             uiContext.Send(d => txtStatus3.Text = "Поток 3: Запущен", null);
-            Thread.Sleep(1000);
 
             if (!File.Exists("primeNumbers.txt"))
             {
@@ -89,14 +116,10 @@ namespace WpfApp17
                 return;
             }
 
-            string[] lines = File.ReadAllLines("primeNumbers.txt");
-            int[] primeNumbers = lines.Select(line => int.Parse(line)).ToArray();
+            var primeNumbers = await ReadNumbersFromFile("primeNumbers.txt");
             var numbersEndingIn7 = primeNumbers.Where(n => n % 10 == 7).ToArray();
 
-            File.WriteAllLines("primeNumbersEndingIn7.txt", numbersEndingIn7.Select(n => n.ToString()));
-
-            Thread.Sleep(1000);
-            uiContext.Send(d => txtStatus3.Text = "Поток 3: Файл с простыми числами, заканчивающимися на 7, создан.", null);
+            await WriteNumbersToFile("primeNumbersEndingIn7.txt", numbersEndingIn7);
 
             mutex.ReleaseMutex();
         }
@@ -115,7 +138,7 @@ namespace WpfApp17
             return true;
         }
 
-        private void btnStart_Click(object sender, RoutedEventArgs e)
+        private async void btnStart_Click(object sender, RoutedEventArgs e)
         {
             try
             {
@@ -123,7 +146,7 @@ namespace WpfApp17
                 txtStatus2.Text = "Поток 2: Ожидает";
                 txtStatus3.Text = "Поток 3: Ожидает";
 
-                new Thread(ThreadFunction1).Start();
+                await RunThreadsAsync();
             }
             catch (Exception ex)
             {
