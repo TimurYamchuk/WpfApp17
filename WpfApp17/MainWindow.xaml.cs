@@ -9,7 +9,7 @@ namespace WpfApp17
 {
     public partial class MainWindow : Window
     {
-        private static SemaphoreSlim semaphore = new SemaphoreSlim(3, 3); // Используем SemaphoreSlim для асинхронности
+        private static SemaphoreSlim semaphore = new SemaphoreSlim(3, 3); // Ограничение по потокам
         private Random random = new Random();
         private Mutex mutex;
         private bool createdNew;
@@ -22,33 +22,20 @@ namespace WpfApp17
 
         private async Task RunThreadsAsync()
         {
-            if (!await semaphore.WaitAsync(0))
-            {
-                MessageBox.Show("Программа не может запустить более 3 потоков.");
-                return;
-            }
-
-            try
-            {
-                // Стартуем первый поток
-                await Task.Run(() => ThreadFunction1());
-            }
-            finally
-            {
-                semaphore.Release();
-            }
+            await Task.WhenAll(ThreadFunction1(), ThreadFunction2(), ThreadFunction3());
         }
 
         private async Task ThreadFunction1()
         {
-            await Task.Yield(); // Позволяет другим потокам работать
+            await Task.Yield();
 
             mutex.WaitOne();
-            uiContext.Send(d => txtStatus1.Text = "Поток 1: Запущен", null);
+            Dispatcher.Invoke(() => txtStatus1.Text = "Поток 1: Запущен");
 
             int[] numbers = GenerateRandomNumbers();
             await WriteNumbersToFile("number.txt", numbers);
 
+            Dispatcher.Invoke(() => txtStatus1.Text = "Поток 1: Записал числа в файл");
             mutex.ReleaseMutex();
         }
 
@@ -64,23 +51,19 @@ namespace WpfApp17
 
         private async Task WriteNumbersToFile(string fileName, int[] numbers)
         {
-            await Task.Run(() =>
-            {
-                File.WriteAllLines(fileName, numbers.Select(n => n.ToString()));
-            });
-            uiContext.Send(d => txtStatus1.Text = "Поток 1: Записал числа в файл", null);
+            await File.WriteAllLinesAsync(fileName, numbers.Select(n => n.ToString()));
         }
 
         private async Task ThreadFunction2()
         {
-            await Task.Yield(); // Позволяет другим потокам работать
+            await Task.Yield();
 
             mutex.WaitOne();
-            uiContext.Send(d => txtStatus2.Text = "Поток 2: Запущен", null);
+            Dispatcher.Invoke(() => txtStatus2.Text = "Поток 2: Запущен");
 
             if (!File.Exists("number.txt"))
             {
-                uiContext.Send(d => txtStatus2.Text = "Поток 2: Файл с числами не найден!", null);
+                Dispatcher.Invoke(() => txtStatus2.Text = "Поток 2: Файл не найден!");
                 mutex.ReleaseMutex();
                 return;
             }
@@ -90,28 +73,26 @@ namespace WpfApp17
 
             await WriteNumbersToFile("primeNumbers.txt", primeNumbers);
 
+            Dispatcher.Invoke(() => txtStatus2.Text = "Поток 2: Простые числа записаны");
             mutex.ReleaseMutex();
         }
 
         private async Task<int[]> ReadNumbersFromFile(string fileName)
         {
-            return await Task.Run(() =>
-            {
-                string[] lines = File.ReadAllLines(fileName);
-                return lines.Select(int.Parse).ToArray();
-            });
+            string[] lines = await File.ReadAllLinesAsync(fileName);
+            return lines.Select(int.Parse).ToArray();
         }
 
         private async Task ThreadFunction3()
         {
-            await Task.Yield(); // Позволяет другим потокам работать
+            await Task.Yield();
 
             mutex.WaitOne();
-            uiContext.Send(d => txtStatus3.Text = "Поток 3: Запущен", null);
+            Dispatcher.Invoke(() => txtStatus3.Text = "Поток 3: Запущен");
 
             if (!File.Exists("primeNumbers.txt"))
             {
-                uiContext.Send(d => txtStatus3.Text = "Поток 3: Файл с простыми числами не найден!", null);
+                Dispatcher.Invoke(() => txtStatus3.Text = "Поток 3: Файл не найден!");
                 mutex.ReleaseMutex();
                 return;
             }
@@ -121,6 +102,7 @@ namespace WpfApp17
 
             await WriteNumbersToFile("primeNumbersEndingIn7.txt", numbersEndingIn7);
 
+            Dispatcher.Invoke(() => txtStatus3.Text = "Поток 3: Числа, оканчивающиеся на 7, записаны");
             mutex.ReleaseMutex();
         }
 
